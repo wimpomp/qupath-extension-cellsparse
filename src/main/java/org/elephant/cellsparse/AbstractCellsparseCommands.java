@@ -9,8 +9,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.Base64;
-import java.util.List;
+import java.util.*;
 
 import javax.imageio.ImageIO;
 
@@ -49,63 +48,77 @@ public abstract class AbstractCellsparseCommands {
 			final int x,
 			final int y,
 			final int width,
-			final int height
+			final int height,
+			final int z,
+			final int t
 	) {
 		BufferedImage image = null;
 		try {
-			image = imageServer.readRegion(downsample, x, y, width, height);
+			image = imageServer.readRegion(downsample, x, y, width, height, z, t);
 		} catch (IOException e) {
 			Dialogs.showErrorMessage(getClass().getName(), e);
 		}
 		return image;
 	}
+
+	private String getStringImages(
+			final ImageServer<BufferedImage> imageServer
+	) {
+		final int sizeT = imageServer.getMetadata().getSizeT();
+		final int width = imageServer.getWidth();
+		final int height = imageServer.getHeight();
+
+		StringBuilder strBuilder = new StringBuilder();
+		for (int t = 0; t < sizeT; t++) {
+			strBuilder
+					.append(base64Encode(readRegionFromServer(imageServer,1.0,0,0, width, height,0, t)))
+					.append(";");
+		}
+		strBuilder.deleteCharAt(strBuilder.length() - 1);
+		return strBuilder.toString();
+	}
+
+	private String getStringLabels(
+			final LabeledImageServer bgLabelServer,
+			final LabeledOffsetImageServer fgLabelServer
+	) {
+		final int sizeT = bgLabelServer.getMetadata().getSizeT();
+		final int width = bgLabelServer.getWidth();
+		final int height = bgLabelServer.getHeight();
+		final ImageCalculator imageCalculator = new ImageCalculator();
+		StringBuilder strBuilder = new StringBuilder();
+		for (int t = 0; t < sizeT; t++) {
+			final BufferedImage bgImage = readRegionFromServer(bgLabelServer,1.0,0,0, width, height,0, t);
+			final BufferedImage fgImage = readRegionFromServer(fgLabelServer,1.0,0,0, width, height,0, t);
+			final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
+			final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
+			final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
+			strBuilder.append(base64Encode(lblImage)).append(";");
+		}
+		strBuilder.deleteCharAt(strBuilder.length() - 1);
+		return strBuilder.toString();
+	}
 	
 	void CellsparseCommand(final ImageData<BufferedImage> imageData, final String endpointURL, final boolean train) {
-		final BufferedImage image = readRegionFromServer(
-				imageData.getServer(),
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
-		final String strImage = base64Encode(image);
+		final String strImages = getStringImages(imageData.getServer());
 
 		final LabeledImageServer bgLabelServer = new LabeledImageServer.Builder(imageData)
 				.backgroundLabel(0)
 				.addLabel("Background", 1)
 				.multichannelOutput(false)
 				.build();
-		final BufferedImage bgImage = readRegionFromServer(
-				bgLabelServer,
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
+
 		final LabeledOffsetImageServer fgLabelServer = new LabeledOffsetImageServer.Builder(imageData)
 				.useFilter(pathObject -> pathObject.getPathClass() == PathClass.getInstance("Foreground"))
 				.useInstanceLabels()
 				.offset(1)
 				.build();
-		final BufferedImage fgImage = readRegionFromServer(
-				fgLabelServer,
-				1.0,
-				0,
-				0,
-				imageData.getServer().getWidth(),
-				imageData.getServer().getHeight()
-		);
-		final ImageCalculator imageCalculator = new ImageCalculator();
-		final ImagePlus bgImp = IJTools.convertToUncalibratedImagePlus("Background", bgImage);
-		final ImagePlus fgImp = IJTools.convertToUncalibratedImagePlus("Foreground", fgImage);
-		final BufferedImage lblImage = imageCalculator.run("Max", bgImp, fgImp).getBufferedImage();
-		final String strLabel = base64Encode(lblImage);
+
+		final String strLabels = getStringLabels(bgLabelServer, fgLabelServer);
 		final Gson gson = GsonTools.getInstance();
 		final CellsparseBody body = CellsparseBody.newBuilder("default")
-				.b64img(strImage)
-				.b64lbl(strLabel)
+				.b64img(strImages)
+				.b64lbl(strLabels)
 				.train(train)
 				.eval(true)
 				.epochs(10)
@@ -126,9 +139,9 @@ public abstract class AbstractCellsparseCommands {
 		try {
 			HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() == HttpURLConnection.HTTP_OK) {
-				List<PathObject> toRomove = imageData.getHierarchy().getAnnotationObjects()
+				List<PathObject> toRemove = imageData.getHierarchy().getAnnotationObjects()
 						.stream().filter(pathObject -> pathObject.getPathClass() == null).toList();
-				imageData.getHierarchy().removeObjects(toRomove, false);
+				imageData.getHierarchy().removeObjects(toRemove, false);
 				List<PathObject> pathObjects = gson.fromJson(response.body(), type);
 				imageData.getHierarchy().addObjects(pathObjects);
 	        }

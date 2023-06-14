@@ -4,7 +4,19 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.elephant</groupId>
 	<artifactId>qupath-extension-cellsparse</artifactId>
-	<version>0.1.0</version>
+	<version>0.1.1</version>
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>16</source>
+					<target>16</target>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
 	<dependencies>
 		<dependency>
 			<groupId>io.github.qupath</groupId>
